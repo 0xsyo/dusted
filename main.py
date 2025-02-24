@@ -242,7 +242,7 @@ def process_wallet(private_key):
         print_stats(wallet_address, score_data)
 
         if score_data.get('remainingPlays', 0) == 0:
-            print(Fore.YELLOW + f"🚫 No remaining plays for {wallet_address}. Skipping to Claiming MON...")
+            print(Fore.YELLOW + f"🚫 No remaining plays for {wallet_address}. Skipping...")
             return
 
         signatures = []
