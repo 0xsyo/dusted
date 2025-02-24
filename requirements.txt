@@ -1,0 +1,5 @@
+requests==2.25.1
+web3==5.17.0
+eth-account==0.5.6
+colorama==0.4.4
+fake-useragent==0.1.11
