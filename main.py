@@ -7,6 +7,7 @@ import requests
 from web3 import Web3
 from web3.middleware import geth_poa_middleware
 from eth_account.messages import encode_defunct
+from uuid import uuid4
 from colorama import Fore, Style, init
 from fake_useragent import UserAgent
 import asyncio
@@ -374,6 +375,7 @@ async def process_wallet(private_key):
             except:
                 print(Fore.RED + f'API Response for {wallet_address}: {error.response.text}')
 
+# Fungsi untuk mendapatkan wallet_id dari endpoint /balances
 async def get_wallet_id(wallet_address, bearer_token):
     try:
         # Gunakan endpoint yang benar untuk mendapatkan wallet_id
