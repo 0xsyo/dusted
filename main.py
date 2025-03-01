@@ -57,7 +57,7 @@ def rainbow_banner():
  |_______||___  |___._|_____|___._|
           |_____|                   
     """
-    
+
     for i, char in enumerate(banner):
         print(colors[i % len(colors)] + char, end="")
         time.sleep(0.007)
@@ -90,14 +90,64 @@ def print_stats(wallet_address, data):
     print(Fore.CYAN + "⏳ Remaining Plays:", Fore.WHITE + str(data.get('remainingPlays', 'N/A')))
     print(Fore.CYAN + "❌ Daily Score:", Fore.WHITE + str(data.get('dailyScore', 'N/A')))
     if data.get('remainingPlays', 0) == 0:
-        print(Fore.YELLOW + f"⏳ Checking MON Rewards {wallet_address}")   
+        print(Fore.YELLOW + f"⏳ Checking MON Rewards {wallet_address}")
+
+# Fungsi untuk mengirim data ke Vercel Insights
+async def send_vercel_insights(user_agent, referer):
+    url = "https://www.dusted.app/_vercel/insights/view"
+    payload = {
+        "o": referer,
+        "sv": "0.1.2",
+        "sdkn": "@vercel/analytics/react",
+        "sdkv": "1.5.0",
+        "ts": int(time.time() * 1000)
+    }
+    headers = {
+        'Content-Type': 'application/json',
+        'User-Agent': user_agent,
+        'Referer': referer,
+        'Origin': 'https://www.dusted.app'
+    }
+    response = requests.post(url, json=payload, headers=headers)
+    if response.status_code == 200:
+        print(Fore.GREEN + "Vercel Insights data sent successfully.")
+    else:
+        print(Fore.RED + f"Failed to send Vercel Insights data: {response.status_code} - {response.text}")
+
+# Fungsi untuk mendapatkan status notifikasi
+async def get_notifications_status(api):
+    try:
+        response = api.get(f"{config['apiBaseUrl']}/notifications/status")
+        if response.status_code == 200:
+            print(Fore.GREEN + "Notifications status retrieved successfully.")
+            return response.json()
+        else:
+            print(Fore.RED + f"Failed to get notifications status: {response.status_code} - {response.text}")
+            return None
+    except Exception as error:
+        print(Fore.RED + f'Error getting notifications status: {str(error)}')
+        return None
+
+# Fungsi untuk mendapatkan pesan room
+async def get_room_messages(api):
+    try:
+        response = api.get(f"{config['apiBaseUrl']}/rooms/monad-testnet/native/messages")
+        if response.status_code == 200:
+            print(Fore.GREEN + "Room messages retrieved successfully.")
+            return response.json()
+        else:
+            print(Fore.RED + f"Failed to get room messages: {response.status_code} - {response.text}")
+            return None
+    except Exception as error:
+        print(Fore.RED + f'Error getting room messages: {str(error)}')
+        return None
 
 # Fungsi untuk mendapatkan Bearer Token
 async def get_bearer_token(wallet_address, private_key, user_agent):
     try:
         # Generate nonce sebagai UUID
         nonce = str(uuid4())
-        
+
         # Format pesan sesuai dengan yang diharapkan oleh server
         message = (
             f"www.dusted.app wants you to sign in with your Ethereum account:\n{wallet_address}\n\n"
@@ -108,15 +158,15 @@ async def get_bearer_token(wallet_address, private_key, user_agent):
             f"Nonce: {nonce}\n"
             f"Issued At: {datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3]}Z"
         )
-        
+
         # Encode pesan dan tanda tangani
         encoded_message = encode_defunct(text=message)
         web3 = Web3(Web3.HTTPProvider(config['rpcUrl']))
         signed_message = web3.eth.account.sign_message(encoded_message, private_key=private_key)
-        
+
         # URL endpoint untuk sign-in
         sign_in_url = f"{config['apiBaseUrl']}/signature/evm/{wallet_address}/sign"
-        
+
         # Payload untuk request
         payload = {
             "message": message,
@@ -124,7 +174,7 @@ async def get_bearer_token(wallet_address, private_key, user_agent):
             "provider": "metamask",
             "chainId": "0x279f"  # Sesuaikan dengan chain ID yang diharapkan server
         }
-        
+
         # Header untuk request
         headers = {
             'Content-Type': 'application/json',
@@ -135,16 +185,16 @@ async def get_bearer_token(wallet_address, private_key, user_agent):
             'priority': 'u=1, i',  # Tambahkan header priority
             'sec-gpc': '1',  # Tambahkan header sec-gpc
         }
-        
+
         # Kirim request ke API
         response = requests.post(sign_in_url, json=payload, headers=headers)
         response.raise_for_status()  # Raise exception jika status code bukan 2xx
-        
+
         # Ambil token dari response
         token = response.json().get('token')
         if not token:
             raise ValueError("Token not found in response")
-        
+
         return token
     except Exception as error:
         print(Fore.RED + f'Error getting Bearer Token for {wallet_address}: {str(error)}')
@@ -167,38 +217,70 @@ def get_gas_price(web3):
         print(Fore.RED + f'Error getting gas price: {str(error)}')
         return None
 
-# Fungsi reusable untuk melakukan Claiming MON
+# Fungsi reusable untuk melakukan Claiming MON - PERBAIKAN DISINI
 async def claim_mon(wallet_address, private_key, signature, score):
     try:
         web3 = Web3(Web3.HTTPProvider(config['rpcUrl']))
         web3.middleware_onion.inject(geth_poa_middleware, layer=0)
-        
-        wallet = web3.eth.account.from_key(private_key)
-        contract = web3.eth.contract(address=config['contractAddress'], abi=ABI)
 
-        print(Fore.GREEN + f'Claiming MON for {wallet_address} Score {score}...')
+        wallet = web3.eth.account.from_key(private_key)
         
+        # Pastikan alamat kontrak menggunakan checksum address
+        contract_address = web3.to_checksum_address(config['contractAddress'])
+        contract = web3.eth.contract(address=contract_address, abi=ABI)
+
+        print(Fore.GREEN + f'Claiming MON for {wallet_address} with Score {score}...')
+        print(Fore.YELLOW + f'Using signature: {signature}')
+
+        # Format signature yang benar 
+        # Hapus 0x prefix jika ada
+        if isinstance(signature, str):
+            if signature.startswith('0x'):
+                signature_bytes = bytes.fromhex(signature[2:])
+            else:
+                signature_bytes = bytes.fromhex(signature)
+        else:
+            signature_bytes = signature
+
+        # Pastikan score dalam format integer
+        if isinstance(score, str):
+            score = int(score)
+
         # Dapatkan harga gas (Gwei) dari jaringan
         gas_price = get_gas_price(web3)
         if not gas_price:
-            raise ValueError("Failed to get gas price")
+            gas_price = web3.to_wei('5', 'gwei')  # Fallback ke 5 Gwei jika gagal mendapatkan harga gas
 
-        # Tambahkan buffer gas limit (misalnya, 1.5x dari estimasi)
-        gas_limit = int(70000 * 1.5)  # Contoh: 1.5x dari gas limit standar
+        # Tambahkan buffer gas limit
+        gas_limit = int(200000)  # Tingkatkan gas limit untuk menghindari out of gas
 
-        tx = contract.functions.claim(score, signature).buildTransaction({
+        # Debug print
+        print(Fore.YELLOW + f'Contract Address: {contract_address}')
+        print(Fore.YELLOW + f'Wallet Address: {wallet.address}')
+        print(Fore.YELLOW + f'Score (totalPoints): {score}')
+        print(Fore.YELLOW + f'Signature (bytes): {signature_bytes.hex()}')
+
+        # Build dan kirim transaksi
+        nonce = web3.eth.get_transaction_count(wallet.address)
+        
+        tx = contract.functions.claim(
+            score,
+            signature_bytes
+        ).build_transaction({
             'from': wallet.address,
             'gas': gas_limit,
             'gasPrice': gas_price,
-            'nonce': web3.eth.getTransactionCount(wallet.address)
+            'nonce': nonce,
+            'chainId': config['chainId']
         })
-        signed_tx = wallet.signTransaction(tx)
-        tx_hash = web3.eth.sendRawTransaction(signed_tx.rawTransaction)
+        
+        signed_tx = web3.eth.account.sign_transaction(tx, private_key)
+        tx_hash = web3.eth.send_raw_transaction(signed_tx.rawTransaction)
         print(Fore.GREEN + f'Transaction submitted for {wallet_address}: {tx_hash.hex()}')
 
         # Menunggu konfirmasi transaksi
         try:
-            receipt = web3.eth.waitForTransactionReceipt(tx_hash, timeout=120)  # Timeout 120 detik
+            receipt = web3.eth.wait_for_transaction_receipt(tx_hash, timeout=180)  # Timeout lebih lama
             if receipt.status == 1:
                 print(Fore.GREEN + f'✅ Transaction confirmed in block for {wallet_address}: {receipt["blockNumber"]}')
             else:
@@ -208,6 +290,8 @@ async def claim_mon(wallet_address, private_key, signature, score):
 
     except Exception as error:
         print(Fore.RED + f'Error claiming MON for {wallet_address}: {str(error)}')
+        import traceback
+        traceback.print_exc()
 
 # Fungsi untuk melakukan Claim Referral Code
 async def claim_referral_code(api, wallet_address):
@@ -222,20 +306,20 @@ async def claim_referral_code(api, wallet_address):
 
         ref_code = ref_codes[0]  # Ambil ref code pertama
         claim_url = f"{config['apiBaseUrl']}/referralcode/claim"
-        
+
         # Payload dengan wallet ID (jika diperlukan)
         payload = {
             "referralCode": ref_code,
             "walletId": wallet_address  # Sertakan wallet ID jika diperlukan
         }
-        
+
         # Header dengan Bearer Token (pastikan tidak ada duplikasi kata "Bearer")
         headers = {
             'Content-Type': 'application/json',
             'Authorization': api.headers["Authorization"],  # Gunakan token yang sudah ada tanpa menambahkan "Bearer" lagi
             'User-Agent': api.headers['User-Agent']
         }
-        
+
         # Kirim request POST
         response = requests.post(claim_url, json=payload, headers=headers)
         response.raise_for_status()  # Akan raise exception jika status code bukan 2xx
@@ -253,14 +337,14 @@ async def claim_referral_code(api, wallet_address):
 async def join_room(api, wallet_id, wallet_address, room_id):
     try:
         join_url = f"{config['apiBaseUrl']}/rooms/monad-testnet/native/subscribe"
-        
+
         # Payload dengan wallet ID dan wallet address
         payload = {
             "wallet_id": wallet_id,
             "wallet_address": wallet_address,
             "room_id": room_id  # Gunakan room_id yang diterima sebagai parameter
         }
-        
+
         # Header dengan Bearer Token dan header tambahan
         headers = {
             'Content-Type': 'application/json',
@@ -312,7 +396,7 @@ async def process_wallet(private_key):
     try:
         web3 = Web3(Web3.HTTPProvider(config['rpcUrl']))
         web3.middleware_onion.inject(geth_poa_middleware, layer=0)
-        
+
         wallet = web3.eth.account.from_key(private_key)
         wallet_address = wallet.address
 
@@ -358,6 +442,9 @@ async def process_wallet(private_key):
             'User-Agent': user_agents[wallet_address]
         })
 
+        # Kirim data ke Vercel Insights
+        await send_vercel_insights(user_agents[wallet_address], 'https://www.dusted.app/')
+
         # Dapatkan wallet_id secara dinamis
         wallet_id = await get_wallet_id(wallet_address, bearer_token)
         if not wallet_id:
@@ -375,11 +462,11 @@ async def process_wallet(private_key):
             except:
                 print(Fore.RED + f'API Response for {wallet_address}: {error.response.text}')
 
-# Fungsi untuk mendapatkan wallet_id dari endpoint /balances
+# Fungsi untuk mendapatkan wallet_id dari endpoint /users/@me
 async def get_wallet_id(wallet_address, bearer_token):
     try:
         # Gunakan endpoint yang benar untuk mendapatkan wallet_id
-        url = f"{config['apiBaseUrl']}/balances"  # Endpoint yang baru
+        url = f"{config['apiBaseUrl']}/users/@me"
         headers = {
             'Authorization': f'Bearer {bearer_token}',
             'Content-Type': 'application/json',
@@ -390,18 +477,18 @@ async def get_wallet_id(wallet_address, bearer_token):
             'priority': 'u=1, i',
             'sec-gpc': '1'
         }
-        
+
         # Kirim request GET ke API
         response = requests.get(url, headers=headers)
         response.raise_for_status()  # Raise exception jika status code bukan 2xx
-        
+
         # Ambil wallet_id dari respons API
-        balances_data = response.json()
-        wallet_id = balances_data.get('wallet_id')  # Sesuaikan dengan field yang benar di respons API
-        
+        user_data = response.json()
+        wallet_id = user_data.get('wallet', {}).get('wallet_id')
+
         if not wallet_id:
             raise ValueError("Wallet ID not found in response")
-        
+
         return wallet_id
     except requests.exceptions.HTTPError as error:
         print(Fore.RED + f'Error getting wallet ID for {wallet_address}: {error.response.status_code} - {error.response.text}')
@@ -441,58 +528,99 @@ async def process_wallet_actions(api, wallet_id, wallet_address, private_key):
             claim_response = api.get(f"{config['apiBaseUrl']}/lasso/claim")
             claim_data = claim_response.json()
             print(Fore.GREEN + f'Claim response for {wallet_address}: {json.dumps(claim_data, indent=2)}')
-            
-            if 'signature' in claim_data and 'score' in claim_data:
-                await claim_mon(wallet_address, private_key, claim_data['signature'], claim_data['score'])
+
+            # Perbaikan: Pastikan signature dan score ada dan valid
+            if isinstance(claim_data, dict) and 'signature' in claim_data and 'score' in claim_data:
+                # Jika signature bukan string "Claim not available" dan score bukan 0
+                if claim_data['signature'] != 'Claim not available' and claim_data['score'] > 0:
+                    await claim_mon(wallet_address, private_key, claim_data['signature'], claim_data['score'])
+                else:
+                    print(Fore.YELLOW + f'No claim available for {wallet_address} at this time')
             else:
-                print(Fore.YELLOW + f'No claim available for {wallet_address} at this time')    
+                print(Fore.YELLOW + f'No claim available for {wallet_address} at this time')  
             return
-            
+
         # LOGIKA BARU: Habiskan semua remainingPlays terlebih dahulu
         play_count = 0
         max_plays = score_data.get('remainingPlays', 0)
-        
+
         print(Fore.CYAN + f'Akan melakukan {max_plays} permainan untuk {wallet_address}...')
-        
+
         while play_count < max_plays:
             play_count += 1
             print(Fore.GREEN + f'Permainan ke-{play_count}/{max_plays} untuk {wallet_address}...')
-            
+
             # Mainkan Lasso
             play_response = api.post(f"{config['apiBaseUrl']}/lasso/play", params={'network': 'monad', 'chain_id': config['chainId']})
             play_data = play_response.json()
             print(Fore.GREEN + f'Play response for {wallet_address} (Game #{play_count}): {json.dumps(play_data, indent=2)}')
-            
+
             if 'error' in play_data:
                 print(Fore.RED + f'Error playing minigame for {wallet_address}: {play_data["error"]}')
                 break
-            
+
             # Tambahkan delay antar permainan
             if play_count < max_plays:
-                delay = random.randint(1, 7)
+                delay = random.randint(2, 7)  # Sedikit lebih lama
                 print(Fore.CYAN + f'Waiting {delay} seconds before next play for {wallet_address}...')
                 await asyncio.sleep(delay)
-        
+
         # Setelah semua permainan selesai, coba claim
         print(Fore.GREEN + f'All games completed for {wallet_address}. Checking for claim availability...')
-        await asyncio.sleep(5)  # Berikan sedikit waktu sebelum mencoba claim
-        
-        max_claim_attempts = 3
+        # Tambahkan delay yang lebih panjang sebelum mencoba claim pertama kali
+        await asyncio.sleep(15)  # Tunggu 15 detik (bukan 5) untuk memastikan score terupdate
+
+        # Refresh status skor terbaru sebelum claim
+        try:
+            refresh_response = api.get(f"{config['apiBaseUrl']}/lasso/score")
+            refreshed_data = refresh_response.json()
+            print(Fore.CYAN + "Updated stats before claim:")
+            print_stats(wallet_address, refreshed_data)
+        except Exception as e:
+            print(Fore.RED + f'Failed to refresh player stats: {str(e)}')
+
+        max_claim_attempts = 5  # Tingkatkan jumlah percobaan
         for attempt in range(max_claim_attempts):
             print(Fore.GREEN + f'Getting claim signature for {wallet_address} (Attempt {attempt+1}/{max_claim_attempts})...')
-            claim_response = api.get(f"{config['apiBaseUrl']}/lasso/claim")
-            claim_data = claim_response.json()
-            print(Fore.GREEN + f'Claim response for {wallet_address}: {json.dumps(claim_data, indent=2)}')
             
-            if 'signature' in claim_data and 'score' in claim_data:
-                await claim_mon(wallet_address, private_key, claim_data['signature'], claim_data['score'])
-                break
-            elif 'score' in claim_data and claim_data['signature'] == 'Claim not available':
-                print(Fore.YELLOW + f'Claim not available for {wallet_address}. Waiting before retry...')
-                await asyncio.sleep(random.randint(1, 7))  # Tunggu sebelum mencoba lagi
-            else:
-                print(Fore.YELLOW + f'Unexpected claim response for {wallet_address}. Waiting before retry...')
-                await asyncio.sleep(random.randint(1, 7))
+            # Tambahkan parameter timestamp ke request claim untuk menghindari caching
+            claim_response = api.get(f"{config['apiBaseUrl']}/lasso/claim", 
+                                    params={'timestamp': int(time.time())})
+            
+            try:
+                claim_data = claim_response.json()
+                print(Fore.GREEN + f'Claim response for {wallet_address}: {json.dumps(claim_data, indent=2)}')
+
+                # Perbaikan: Pastikan signature dan score ada dan valid
+                if isinstance(claim_data, dict) and 'signature' in claim_data and 'score' in claim_data:
+                    if claim_data['signature'] != 'Claim not available' and claim_data['score'] > 0:
+                        await claim_mon(wallet_address, private_key, claim_data['signature'], claim_data['score'])
+                        break
+                    else:
+                        print(Fore.YELLOW + f'Claim not available for {wallet_address}. Waiting before retry...')
+                elif isinstance(claim_data, dict) and 'message' in claim_data and claim_data['message'] == 'Not available to claim':
+                    print(Fore.YELLOW + f'Not available to claim for {wallet_address}. Waiting before retry...')
+                else:
+                    print(Fore.YELLOW + f'Unexpected claim response for {wallet_address}. Waiting before retry...')
+                
+                # Tunggu lebih lama antara percobaan (semakin lama untuk setiap percobaan)
+                wait_time = 10 + (attempt * 5)  # 10s, 15s, 20s, 25s, 30s
+                print(Fore.CYAN + f'Waiting {wait_time} seconds before next attempt...')
+                await asyncio.sleep(wait_time)
+                
+                # Refresh skor sebelum mencoba lagi
+                if attempt < max_claim_attempts - 1:
+                    try:
+                        refresh_response = api.get(f"{config['apiBaseUrl']}/lasso/score")
+                        refreshed_data = refresh_response.json()
+                        print(Fore.CYAN + "Refreshed stats before next attempt:")
+                        print_stats(wallet_address, refreshed_data)
+                    except Exception as e:
+                        print(Fore.RED + f'Failed to refresh player stats: {str(e)}')
+                
+            except Exception as e:
+                print(Fore.RED + f'Error parsing claim response: {str(e)}')
+                await asyncio.sleep(5)
         else:
             print(Fore.RED + f'Failed to get claim after {max_claim_attempts} attempts for {wallet_address}.')
 
@@ -517,7 +645,7 @@ async def main():
                 delay = random.randint(1, 7)
                 print(Fore.CYAN + f'Waiting {delay} seconds before next wallet...')
                 await asyncio.sleep(delay)
-                print(Fore.CYAN + "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+                print(Fore.CYAN + "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
     except Exception as error:
         print(Fore.RED + f'Error in main function: {str(error)}')
 
